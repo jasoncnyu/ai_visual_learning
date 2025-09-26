@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>1D Logistic Regression Simulator</title>
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <!-- MathJax -->
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <style>
+    body { background:#111; color:#eee; font-family:sans-serif; text-align:center; }
+    h1 { margin:20px 0; }
+    canvas { display:block; margin:10px auto; border-radius:6px; background:#000; }
+    #controls { margin:15px auto; display:flex; flex-wrap:wrap; justify-content:center; gap:8px; }
+    button { padding:6px 12px; border:none; border-radius:4px; cursor:pointer; font-size:14px; }
+    #btn-class0 { background:#0dcaf0; color:#000; }
+    #btn-class1 { background:#dc3545; color:#fff; }
+    #btn-learn { background:#0d6efd; color:#fff; }
+    #btn-pause { background:#ffc107; color:#000; }
+    #btn-step { background:#198754; color:#fff; }
+    #btn-reset { background:#6c757d; color:#fff; }
+    input { padding:4px; width:70px; border-radius:4px; border:1px solid #444; }
+    #lossChart { margin-top:10px; }
+    .status { margin-top:10px; font-family:monospace; }
+    .explanation { max-width:800px; margin:40px auto; text-align:left; line-height:1.6; }
+  </style>
+</head>
+<body>
+  <h1>1D Logistic Regression Simulator</h1>
+  <canvas id="cv" width="800" height="500"></canvas>
+
+  <div id="controls">
+    <button id="btn-class0">Class 0</button>
+    <button id="btn-class1">Class 1</button>
+    <button id="btn-learn">▶ Learn</button>
+    <button id="btn-pause">⏸ Pause</button>
+    <button id="btn-step">Step</button>
+    <button id="btn-reset">Reset</button>
+    <label>LR: <input type="number" id="lr" value="0.1" step="0.01" min="0.001" /></label>
+  </div>
+
+  <div class="status">
+    <span id="status"></span><br>
+    <span id="equation"></span>
+  </div>
+
+  <h3>Loss over Epochs</h3>
+  <canvas id="lossChart" width="800" height="200"></canvas>
+
+  <div class="explanation">
+    <h2>How Logistic Regression Works</h2>
+    <p><b>Input Data:</b> Each data point is defined by a feature value <code>x</code> (plotted on the horizontal axis) and a class label (0 or 1). In this simulator, Class 0 points are blue and Class 1 points are red, placed along the x-axis.</p>
+
+    <p><b>Model:</b> Logistic Regression models the probability that a point belongs to Class 1 using the sigmoid function:
+    \[ \hat{y} = \sigma(ax+b) = \frac{1}{1 + e^{-(ax+b)}} \]
+    Here, <code>a</code> is the weight and <code>b</code> is the bias. The sigmoid squashes the linear function into a probability between 0 and 1.</p>
+
+    <p><b>Loss Function:</b> We measure the error using Binary Cross-Entropy (BCE):
+    \[ L = -\frac{1}{n} \sum_{i=1}^n \Big(y_i \log(\hat{y}_i) + (1-y_i) \log(1-\hat{y}_i)\Big) \]
+    where \(y_i\) is the true label and \(\hat{y}_i\) is the predicted probability.</p>
+
+    <p><b>Learning:</b> Parameters are updated with Gradient Descent. For each step:
+      <ul>
+        <li>\(\frac{\partial L}{\partial a} = \frac{1}{n} \sum (\hat{y}_i - y_i)x_i\)</li>
+        <li>\(\frac{\partial L}{\partial b} = \frac{1}{n} \sum (\hat{y}_i - y_i)\)</li>
+      </ul>
+      Then we update:
+      \[ a \leftarrow a - lr \cdot \frac{\partial L}{\partial a}, \quad b \leftarrow b - lr \cdot \frac{\partial L}{\partial b} \]
+    </p>
+
+    <p><b>Interpretation:</b> If <code>a</code> is positive, larger <code>x</code> values increase the probability of Class 1. If <code>a</code> is negative, larger <code>x</code> values increase the probability of Class 0. The bias <code>b</code> shifts the decision boundary along the x-axis.</p>
+
+    <p><b>Convergence:</b> As training progresses, the yellow sigmoid curve adjusts to better separate the blue and red points, while the loss decreases toward zero.</p>
+  </div>
+
+  <script>
+    $(function(){
+      const cv=document.getElementById('cv');
+      const ctx=cv.getContext('2d');
+      const lossCanvas=document.getElementById('lossChart');
+      const lossCtx=lossCanvas.getContext('2d');
+
+      let points=[]; // {x,label}
+      let m=0,b=0;
+      let running=false;
+      let epoch=0;
+      let lastLoss=Infinity;
+      let stableCount=0;
+      let lossHistory=[];
+      let currentLabel=0;
+
+      $('#btn-class0').on('click',()=>{ currentLabel=0; });
+      $('#btn-class1').on('click',()=>{ currentLabel=1; });
+
+      function toWorldX(sx){
+        const rect=cv.getBoundingClientRect();
+        return (sx-rect.left)/rect.width*20-10;
+      }
+
+      cv.addEventListener('click',function(e){
+        const x=toWorldX(e.clientX);
+        points.push({x,label:currentLabel});
+        draw();
+      });
+
+      function sigmoid(z){ return 1/(1+Math.exp(-z)); }
+      function predict(x){ return sigmoid(m*x+b); }
+
+      function loss(){
+        if(points.length===0) return 0;
+        let s=0;
+        for(const p of points){
+          const yhat=predict(p.x);
+          s += -(p.label*Math.log(yhat+1e-8) + (1-p.label)*Math.log(1-yhat+1e-8));
+        }
+        return s/points.length;
+      }
+
+      function grad(){
+        let dm=0,db=0;
+        for(const p of points){
+          const yhat=predict(p.x);
+          const err=yhat-p.label;
+          dm+=err*p.x;
+          db+=err;
+        }
+        dm/=points.length;
+        db/=points.length;
+        return {dm,db};
+      }
+
+      function stepGD(lr){
+        if(points.length===0) return;
+        const {dm,db}=grad();
+        m-=lr*dm;
+        b-=lr*db;
+        epoch++;
+      }
+
+      function draw(){
+        ctx.clearRect(0,0,cv.width,cv.height);
+
+        // Padding top/bottom
+        const topPadding=40;
+        const bottomPadding=40;
+
+        // Axes
+        ctx.strokeStyle='#666';
+        ctx.beginPath();
+        const xAxisY=cv.height-bottomPadding; // x-axis at bottom
+        ctx.moveTo(0,xAxisY); ctx.lineTo(cv.width,xAxisY);
+        const yAxisX=cv.width/2; // y-axis at center (x=0)
+        ctx.moveTo(yAxisX,0); ctx.lineTo(yAxisX,cv.height);
+        ctx.stroke();
+
+        // Y labels 0 and 1
+        ctx.fillStyle="#eee";
+        ctx.font="14px sans-serif";
+        ctx.fillText("1", yAxisX+5, topPadding);
+        ctx.fillText("0", yAxisX+5, cv.height-bottomPadding);
+
+        // Data points on x-axis line
+        for(const p of points){
+          const sx=(p.x+10)/20*cv.width;
+          const sy=xAxisY; // always on x-axis (y=0)
+          ctx.fillStyle = (p.label===0? '#0dcaf0':'#dc3545');
+          ctx.beginPath();
+          ctx.arc(sx,sy,6,0,Math.PI*2);
+          ctx.fill();
+        }
+
+        // Sigmoid curve (map y to [0,1])
+        ctx.strokeStyle='#ffc107';
+        ctx.beginPath();
+        for(let px=0;px<cv.width;px++){
+          const x=(px/cv.width)*20-10;
+          const yhat=predict(x);
+          const sy=cv.height - (yhat*(cv.height-topPadding-bottomPadding)+bottomPadding);
+          if(px===0) ctx.moveTo(px,sy);
+          else ctx.lineTo(px,sy);
+        }
+        ctx.stroke();
+
+        const l=loss();
+        lossHistory.push(l);
+        if(lossHistory.length>100) lossHistory.shift();
+
+        $('#status').text(`Epoch: ${epoch} | Loss: ${l.toFixed(6)}`);
+        $('#equation').text(`y = sigmoid(${m.toFixed(4)}·x + ${b.toFixed(4)})`);
+        MathJax.typeset();
+
+        drawLoss();
+      }
+
+      function drawLoss(){
+        lossCtx.clearRect(0,0,lossCanvas.width,lossCanvas.height);
+        if(lossHistory.length<2) return;
+        lossCtx.strokeStyle='#0dcaf0';
+        lossCtx.beginPath();
+        const step=lossCanvas.width/(lossHistory.length-1);
+        let y0=lossCanvas.height - lossHistory[0]*50;
+        lossCtx.moveTo(0,y0);
+        for(let i=1;i<lossHistory.length;i++){
+          let y=lossCanvas.height - lossHistory[i]*50;
+          if(y<0) y=0;
+          if(y>lossCanvas.height) y=lossCanvas.height;
+          lossCtx.lineTo(i*step,y);
+        }
+        lossCtx.stroke();
+      }
+
+      function tick(){
+        if(!running) return;
+        const lr=parseFloat($('#lr').val());
+        stepGD(lr);
+        const currentLoss=loss();
+        if(Math.abs(currentLoss-lastLoss)<1e-6){ stableCount++; } else { stableCount=0; }
+        lastLoss=currentLoss;
+        draw();
+        if(stableCount>50){ running=false; console.log("Stopped: Loss converged"); return; }
+        requestAnimationFrame(tick);
+      }
+
+      $('#btn-learn').on('click',function(){ if(!running){ running=true; tick(); } });
+      $('#btn-pause').on('click',function(){ running=false; });
+      $('#btn-step').on('click',function(){ stepGD(parseFloat($('#lr').val())); draw(); });
+      $('#btn-reset').on('click',function(){ running=false; points=[]; m=0;b=0;epoch=0;lastLoss=Infinity;stableCount=0;lossHistory=[]; draw(); });
+
+      draw();
+    });
+  </script>
+</body>
+</html>
